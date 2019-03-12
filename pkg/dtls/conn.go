@@ -16,6 +16,7 @@ import (
 const initialTickerInterval = time.Second
 const cookieLength = 20
 const defaultNamedCurve = namedCurveX25519
+const writeTimeout = 500 * time.Millisecond
 
 var invalidKeyingLabels = map[string]bool{
 	"client finished": true,
@@ -264,8 +265,25 @@ func (c *Conn) internalSend(pkt *recordLayer, shouldEncrypt bool) {
 		}
 	}
 
-	if _, err := c.nextConn.Write(raw); err != nil {
-		c.stopWithError(err)
+	writeChannel := make(chan error)
+	go func() {
+		_, err := c.nextConn.Write(raw)
+		if err != nil {
+			writeChannel <- err
+		}
+		close(writeChannel)
+	}()
+
+	writeTimeout := time.NewTimer(writeTimeout)
+	select {
+	case <-writeTimeout.C:
+		c.stopWithError(errors.New("write timed out"))
+
+	case err := <-writeChannel:
+		writeTimeout.Stop()
+		if err != nil {
+			c.stopWithError(err)
+		}
 	}
 }
 
